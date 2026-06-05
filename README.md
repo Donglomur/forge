@@ -170,7 +170,7 @@ forge today is a **validated grasp-data factory**: it converts one human demo in
 
 ## AI usage disclosure
 
-This project was built with heavy use of an AI assistant (Anthropic's Claude) as a pair-programming and debugging partner: drafting and refactoring code, diagnosing rendering and numerical issues, and iterating on the visualization. The research direction, system architecture, and engineering decisions were mine; I supplied the real DexCanvas data, ran every evaluation, and validated all numbers reported here against real runs. AI-suggested code that did not pass the tests or match the real-data diagnostics was rejected and reworked.
+This project was built with heavy use of an AI assistant (Anthropic's Claude) as a pair-programming and debugging partner: drafting and refactoring code, diagnosing rendering and numerical issues, and iterating on the visualization. The research direction, system architecture, and engineering decisions were mine; I supplied the real DexCanvas data, ran every evaluation, and validated all numbers reported here against real runs. All the ideas, equations, and implementations were mine own, I just used Claude to help me with repetitive coding tasks.
 
 ## Credits & licenses
 
