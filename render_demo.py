@@ -482,6 +482,8 @@ def clean_trajectory_mimic(demo, kp, hand_name="leap", obj_half_mm=None):
 def render_pick(demo, kp, hand_name="leap", out="forge_demo.mp4", stride=3,
                 W=480, H=480, fps=30, mode="kinematic", grip_mode="human",
                 azim=-120, elev=-12, zoom=1.0, orbit=False):
+    if mode == "follow":
+        return _render_follow(demo, kp, hand_name, out, W, H, fps)
     if mode == "physics":
         return _render_physics(demo, kp, hand_name, out, stride, W, H, fps)
 
@@ -586,56 +588,244 @@ def render_pick(demo, kp, hand_name="leap", out="forge_demo.mp4", stride=3,
     return out
 
 
-def _render_physics(demo, kp, hand_name, out, stride, W, H, fps):
+def _render_saved_pick(path, out, W, H, fps, demo, kp):
+    """Play back the exact pick rollout the diagnostic verified and saved, with the
+    REAL human motion beside it (human input | robot pick)."""
+    z = np.load(path, allow_pickle=True)
+    hand_name = str(z["hand"]); real_half = float(z["real_half"])
+    held = float(z["final_height"]); success = bool(z["success"])
+    compliant = bool(z["compliant"]) if "compliant" in z.files else False
     spec = hands.load_hand(hand_name)
+    scp = ReplayScene(spec.xml_path, spec.palm, obj_size=(real_half,) * 3, table_z=0.0,
+                      compliant_wrist=compliant)
+    m, d = scp.model, scp.data
+    m.vis.headlight.ambient[:] = 0.6; m.vis.headlight.diffuse[:] = 0.9; m.vis.headlight.specular[:] = 0.3
+    fadr = [m.jnt_qposadr[m.actuator_trnid[i, 0]] for i in range(m.nu)]
+    _plane = next((g for g in range(m.ngeom) if m.geom_type[g] == mujoco.mjtGeom.mjGEOM_PLANE), None)
+    _obj = next(g for g in range(m.ngeom) if m.geom_bodyid[g] == scp.obj_bid)
+    if _plane is not None: m.geom_rgba[_plane] = [0.90, 0.91, 0.94, 1.0]
+    m.geom_rgba[_obj] = [0.96, 0.45, 0.13, 1.0]
+    for g in range(m.ngeom):
+        if g not in (_plane, _obj) and m.geom_rgba[g, 3] > 0:
+            m.geom_rgba[g, :3] = [0.92, 0.93, 0.96]
+    rp, rq = z["root_pos"], z["root_quat"]; ff = z["fingers"]
+    op, oq = z["obj_pos"], z["obj_quat"]; L = len(op)
+    print(f"  rendering the VERIFIED pick rollout from the diagnostic "
+          f"({hand_name}, held {held*100:+.1f}cm, {'HELD' if success else 'partial lift'})")
+    cam = mujoco.MjvCamera(); cam.lookat[:] = op.mean(0)
+    cam.distance = max(float(np.ptp(op, 0).max()), 0.18) * 4.0
+    cam.azimuth = -120; cam.elevation = -14
+    ren = mujoco.Renderer(m, height=H, width=W)
+
+    # human side: the real demo motion over its pick window (lower -> grasp -> lift)
+    eef = demo.eef_poses
+    objw = demo.object_poses[list(demo.object_poses)[0]]
+    objw = objw if objw.ndim == 3 else np.tile(objw, (len(eef), 1, 1))
+    T = min(len(eef), len(kp), len(objw))
+    gf = int(np.argmin(np.linalg.norm(kp[:, 4] - kp[:, 8], axis=1)))
+    kp_world = np.einsum('tij,tkj->tki', eef[:T, :3, :3], kp[:T]) + eef[:T, :3, 3][:, None]
+    w0 = max(0, gf - 250); w1 = min(T, gf + 350)
+    if w1 - w0 < 8: w0, w1 = 0, T
+    hidx = np.linspace(w0, w1 - 1, L).round().astype(int)
+    pts = kp_world[w0:w1].reshape(-1, 3)
+    ocs = objw[w0:w1, :3, 3]
+    allp = np.concatenate([pts, ocs], 0)
+    c = allp.mean(0); rad = max(float(np.abs(allp - c).max()), 0.08) * 1.1
+    lims = [(c[0] - rad, c[0] + rad), (c[1] - rad, c[1] + rad), (c[2] - rad, c[2] + rad)]
+    h_table = float(np.min(objw[:T, 2, 3])) - real_half
+
+    frames = []
+    for i in range(L):
+        if compliant and scp._root_qadr is not None:
+            d.qpos[scp._root_qadr:scp._root_qadr + 3] = rp[i]
+            d.qpos[scp._root_qadr + 3:scp._root_qadr + 7] = rq[i]
+        else:
+            d.mocap_pos[scp.mocap_id] = rp[i]; d.mocap_quat[scp.mocap_id] = rq[i]
+        d.qpos[fadr] = ff[i]
+        d.qpos[scp.obj_qadr:scp.obj_qadr + 3] = op[i]
+        d.qpos[scp.obj_qadr + 3:scp.obj_qadr + 7] = oq[i]
+        mujoco.mj_forward(m, d)
+        ren.update_scene(d, cam); robot = ren.render()
+        human = human_frame(kp_world[hidx[i]], objw[hidx[i], :3, 3], real_half,
+                            lims, -14, -120, h_table, W, H)
+        hh = min(human.shape[0], robot.shape[0]); ww = min(human.shape[1], robot.shape[1])
+        frames.append(np.concatenate([human[:hh, :ww], robot[:hh, :ww]], axis=1))
+    imageio.mimsave(out, frames, fps=fps, quality=8)
+    print(f"\nwrote {out}  ({len(frames)} frames, human | {hand_name} VERIFIED physics pick "
+          f"of the real {2*real_half*100:.1f}cm object, {W*2}x{H})")
+    return out
+
+
+def _render_follow(demo, kp, hand_name, out, W, H, fps):
+    """The robot hand FOLLOWS the real human motion: palm tracks the human wrist
+    path, fingers track the retargeted joint angles, and the cube rides its real
+    recorded trajectory. Kinematic playback (no dynamics, nothing to explode),
+    shown beside the human input. This is the retargeting, played straight."""
+    spec = hands.load_hand(hand_name)
+    nu = spec.build_model().nu
+    # CurlRetargeter copies the human finger BENDS onto the robot (faithful gesture,
+    # no frame contortion), unlike DexPilot which matches tip vectors for grasping.
+    from forge.retarget import CurlRetargeter
+    fq = CurlRetargeter(spec).retarget_sequence(kp)
+    if fq.shape[1] != nu:
+        raise SystemExit(f"{hand_name}: curl dim {fq.shape[1]} != actuators {nu} "
+                         f"(use leap or allegro for follow mode).")
+    eef = demo.eef_poses
+    objw = demo.object_poses[list(demo.object_poses)[0]]
+    objw = objw if objw.ndim == 3 else np.tile(objw, (len(eef), 1, 1))
+    T = min(len(eef), len(fq), len(objw))
+    gf = int(np.argmin(np.linalg.norm(kp[:, 4] - kp[:, 8], axis=1)))
+    obj_rest_z = float(np.min(objw[:T, 2, 3]))
+    real_half = 0.02
+    sc = ReplayScene(spec.xml_path, spec.palm, obj_size=(real_half,) * 3,
+                     table_z=obj_rest_z - real_half)
+    try:
+        info = sc.grasp_probe(eef[gf], fq[gf], objw[gf], open_q=fq[0])
+        real_half = float(info["obj_half"])
+        sc = ReplayScene(spec.xml_path, spec.palm, obj_size=(real_half,) * 3,
+                         table_z=obj_rest_z - real_half)
+    except Exception:
+        pass
+    m, d = sc.model, sc.data
+    m.vis.headlight.ambient[:] = 0.6; m.vis.headlight.diffuse[:] = 0.9; m.vis.headlight.specular[:] = 0.3
+    fadr = [m.jnt_qposadr[m.actuator_trnid[i, 0]] for i in range(m.nu)]
+    _plane = next((g for g in range(m.ngeom) if m.geom_type[g] == mujoco.mjtGeom.mjGEOM_PLANE), None)
+    _obj = next(g for g in range(m.ngeom) if m.geom_bodyid[g] == sc.obj_bid)
+    if _plane is not None: m.geom_rgba[_plane] = [0.90, 0.91, 0.94, 1.0]
+    m.geom_rgba[_obj] = [0.96, 0.45, 0.13, 1.0]
+    for g in range(m.ngeom):
+        if g not in (_plane, _obj) and m.geom_rgba[g, 3] > 0:
+            m.geom_rgba[g, :3] = [0.92, 0.93, 0.96]
+
+    # window: approach -> grasp -> top of the lift, taken from the real object path
+    objz = objw[:T, 2, 3]; top = int(np.argmax(objz))
+    w0 = max(0, gf - 300); w1 = min(T, max(top + 40, gf + 200))
+    if w1 - w0 < 8: w0, w1 = 0, T
+    L = int(min(170, w1 - w0))
+    idx = np.linspace(w0, w1 - 1, L).round().astype(int)
+    kp_world = np.einsum('tij,tkj->tki', eef[:T, :3, :3], kp[:T]) + eef[:T, :3, 3][:, None]
+    ocs = objw[w0:w1, :3, 3]
+    cam = mujoco.MjvCamera()
+    cam.lookat[:] = ocs.mean(0)
+    cam.distance = max(float(np.ptp(ocs, 0).max()), 0.18) * 4.0
+    cam.azimuth = -120; cam.elevation = -14
+    ren = mujoco.Renderer(m, height=H, width=W)
+
+    pts = kp_world[w0:w1].reshape(-1, 3)
+    allp = np.concatenate([pts, ocs], 0); c = allp.mean(0)
+    rad = max(float(np.abs(allp - c).max()), 0.08) * 1.1
+    lims = [(c[0] - rad, c[0] + rad), (c[1] - rad, c[1] + rad), (c[2] - rad, c[2] + rad)]
+    h_table = obj_rest_z - real_half
+
+    print(f"  follow: robot {hand_name} tracking the human wrist + retargeted fingers; "
+          f"cube on its real path ({2*real_half*100:.1f}cm), frames {w0}..{w1}")
+
+    # ---- de-flip: align the robot palm frame to the human palm frame ----
+    # The dexcanvas hand-local frame sits at a fixed ~150-176 deg offset from the
+    # robot model's palm frame (the number diagnose STEP 06 HAND-MATCH reports).
+    # Without correcting it the robot renders rotated off the human. Measured ONCE
+    # at the grasp frame from the RIGID palm landmarks, so it's a constant convention
+    # fix and the hand does not swing as the fingers articulate. Display only --
+    # it touches nothing in the validated retarget / force-closure / pick pipeline.
+    def _u(v): return v / (np.linalg.norm(v) + 1e-9)
+    thumb_idx = getattr(spec, "thumb_idx", len(spec.tips) - 1)
+    tips_b = [m.body(t).id for t in spec.tips]
+    def _palm_frames(t):
+        kw = kp_world[t]; w = kw[0]; mcp = kw[[5, 9, 13, 17]]
+        fh = _u(mcp.mean(0) - w); sh = _u(kw[17] - kw[5])
+        nh = _u(np.cross(fh, sh)); sh = np.cross(nh, fh)
+        Rh = np.column_stack([fh, sh, nh])
+        r0 = eef[t] @ se3.pose_inv(sc.root_to_palm); p0, R0 = se3.unmake_pose(r0)
+        d.mocap_pos[sc.mocap_id] = p0; d.mocap_quat[sc.mocap_id] = se3.mat2quat(R0)
+        d.qpos[fadr] = fq[t]; mujoco.mj_forward(m, d)
+        pp = d.xpos[sc.palm_bid].copy(); tp = np.array([d.xpos[b] for b in tips_b])
+        nt = np.array([tp[i] for i in range(len(tips_b)) if i != thumb_idx])
+        frd = _u(nt.mean(0) - pp); srd = _u(nt[-1] - nt[0])
+        nrd = _u(np.cross(frd, srd)); srd = np.cross(nrd, frd)
+        return Rh, np.column_stack([frd, srd, nrd])
+    Rh_g, Rr_g = _palm_frames(gf); R_corr = Rh_g @ Rr_g.T
+    _ang = np.degrees(np.arccos(np.clip((np.trace(R_corr) - 1) / 2, -1, 1)))
+    print(f"  de-flip: corrected a {_ang:.0f} deg palm-frame offset "
+          f"(robot now oriented like the human)")
+
+    frames = []
+    for t in idx:
+        aligned = R_corr @ eef[t, :3, :3]
+        root = se3.make_pose(eef[t, :3, 3], aligned) @ se3.pose_inv(sc.root_to_palm)
+        wp, wR = se3.unmake_pose(root)
+        d.mocap_pos[sc.mocap_id] = wp; d.mocap_quat[sc.mocap_id] = se3.mat2quat(wR)
+        d.qpos[fadr] = fq[t]
+        op, oR = se3.unmake_pose(objw[t]); d.qpos[sc.obj_qadr:sc.obj_qadr + 3] = op
+        d.qpos[sc.obj_qadr + 3:sc.obj_qadr + 7] = se3.mat2quat(oR)
+        mujoco.mj_forward(m, d)
+        ren.update_scene(d, cam); robot = ren.render()
+        human = human_frame(kp_world[t], objw[t, :3, 3], real_half, lims, -14, -120, h_table, W, H)
+        hh = min(human.shape[0], robot.shape[0]); ww = min(human.shape[1], robot.shape[1])
+        frames.append(np.concatenate([human[:hh, :ww], robot[:hh, :ww]], axis=1))
+    imageio.mimsave(out, frames, fps=fps, quality=8)
+    print(f"\nwrote {out}  ({len(frames)} frames, human | {hand_name} following the human "
+          f"motion, {W*2}x{H})")
+    return out
+
+
+def _render_physics(demo, kp, hand_name, out, stride, W, H, fps):
+    """Render the ACTUAL force-capped pick() rollout: the object moves only
+    because contact forces move it. Controller is auto-tuned for the REAL object
+    size from the demo (object size is never chosen by us).
+
+    If the diagnostic already saved its verified rollout to forge_pick.npz, we
+    render THAT exact rollout (single source of truth, the video IS the
+    verification). Otherwise we compute it here.
+    """
+    if os.path.exists("forge_pick.npz"):
+        try:
+            return _render_saved_pick("forge_pick.npz", out, W, H, fps, demo, kp)
+        except Exception as e:
+            print(f"  (could not render saved rollout: {e}; recomputing)")
+    from forge.refine import refine_grasp
+    from forge.tune import tune_pick
+    spec = hands.load_hand(hand_name)
+    nu = spec.build_model().nu
     fq = DexPilotRetargeter(spec).retarget_sequence(kp)
     eef = demo.eef_poses
     obj0 = demo.object_poses[list(demo.object_poses)[0]]
     objw = obj0 if obj0.ndim == 3 else np.tile(obj0, (len(eef), 1, 1))
     T = min(len(eef), len(fq), len(objw))
     gf = int(np.argmin(np.linalg.norm(kp[:, 4] - kp[:, 8], axis=1)))
-    real_obj = obj0.ndim == 3 and float(np.ptp(objw[:T, :3, 3], 0).max()) > 0.01
-    obj_rest_z = float(np.min(objw[:T, 2, 3])) if real_obj else 0.02
-    sc = ReplayScene(spec.xml_path, spec.palm, table_z=obj_rest_z - 0.02)
-    m, d = sc.model, sc.data
-    m.vis.headlight.ambient[:] = 0.7; m.vis.headlight.diffuse[:] = 0.9
-    fadr = [m.jnt_qposadr[m.actuator_trnid[i, 0]] for i in range(m.nu)]
-    tips = [m.body(t).id for t in spec.tips]
-    kp_world = np.einsum('tij,tkj->tki', eef[:T, :3, :3], kp[:T]) + eef[:T, :3, 3][:, None]
-    hand_rad = max(float(np.median(np.linalg.norm(kp_world - kp_world[:, :1], axis=2).max(1))) * 1.25, 0.05)
-    if real_obj:
-        obj_rel = np.linalg.inv(eef[gf]) @ objw[gf]
-    else:
-        root = eef[gf] @ se3.pose_inv(sc.root_to_palm); wp, wR = se3.unmake_pose(root)
-        d.mocap_pos[sc.mocap_id] = wp; d.mocap_quat[sc.mocap_id] = se3.mat2quat(wR)
-        d.qpos[fadr] = fq[gf]; mujoco.mj_forward(m, d)
-        cen = np.mean([d.xpos[b] for b in tips], axis=0)
-        obj_rel = np.linalg.inv(eef[gf]) @ se3.make_pose(cen, np.eye(3))
-    print("  physics: establishing grip then lifting ...")
-    res = sc.dynamic_lift(eef, fq, obj_rel, g=gf, lift_h=0.12)
-    print(f"  physics result: lift={res['lift']*100:+.1f}cm -> "
-          f"{'HELD' if res['success'] else f'slipped {res['final_slip']*100:.1f}cm'}")
-    rw, rfq, ro = res["wrist"], res["fingers"], res["object"]; L = len(rw)
-    hidx = np.linspace(gf, T - 1, L).round().astype(int)
-    cam = mujoco.MjvCamera(); cam.lookat[:] = ro[:, :3, 3].mean(0)
-    cam.distance = max(np.ptp(ro[:, :3, 3], 0).max(), 0.18) * 4.0
-    cam.azimuth = -120; cam.elevation = -14
-    ren = mujoco.Renderer(m, height=H, width=W)
-    frames = []
-    for i in range(0, L, max(1, stride // 2)):
-        root = rw[i] @ se3.pose_inv(sc.root_to_palm); wp, wR = se3.unmake_pose(root)
-        d.mocap_pos[sc.mocap_id] = wp; d.mocap_quat[sc.mocap_id] = se3.mat2quat(wR)
-        d.qpos[fadr] = rfq[i]
-        op, oR = se3.unmake_pose(ro[i])
-        d.qpos[sc.obj_qadr:sc.obj_qadr+3] = op; d.qpos[sc.obj_qadr+3:sc.obj_qadr+7] = se3.mat2quat(oR)
-        mujoco.mj_forward(m, d)
-        ren.update_scene(d, cam); robot = ren.render()
-        human = human_frame(kp_world[hidx[i]], None, kp_world[hidx[i], 0], hand_rad, W, H)
-        hh = min(human.shape[0], robot.shape[0]); ww = min(human.shape[1], robot.shape[1])
-        frames.append(np.concatenate([human[:hh, :ww], robot[:hh, :ww]], axis=1))
-    imageio.mimsave(out, frames, fps=fps, quality=8)
-    print(f"\nwrote {out}  ({len(frames)} frames, {hand_name}, PHYSICS lift, {W*2}x{H})")
-    return out
+    if fq.shape[1] != nu:
+        raise SystemExit(f"{hand_name}: retarget dim {fq.shape[1]} != actuators {nu}; "
+                         f"physics render needs the nq->nu mapping (try allegro or leap).")
+    obj_rest_z = float(np.min(objw[:T, 2, 3])) if obj0.ndim == 3 else 0.02
+    tbl = obj_rest_z - 0.02
+
+    # REAL object size, measured from the demo
+    sc0 = ReplayScene(spec.xml_path, spec.palm, table_z=tbl)
+    info = sc0.grasp_probe(eef[gf], fq[gf], objw[gf], open_q=fq[0])
+    real_half = float(info["obj_half"])
+
+    # refine the grasp, auto-tune ONLY the controller for the real object, record
+    obj_rel = np.linalg.inv(eef[gf]) @ objw[gf]
+    fq_ref, _, _ = refine_grasp(sc0, eef, fq, obj_rel, gf, iters=5, npop=12, elite=4)
+    qg, qo = fq_ref[gf], fq_ref[0]
+    print(f"  physics: auto-tuning {hand_name} controller for the real "
+          f"{2*real_half*100:.1f}cm object ...")
+    params, _ = tune_pick(spec, qg, qo, obj_xy=(0.2, 0.0), obj_half=real_half,
+                          table_z=0.0, search_obj_size=False, iters=5, npop=10)
+    scp = ReplayScene(spec.xml_path, spec.palm, obj_size=(real_half,) * 3, table_z=0.0,
+                      compliant_wrist=False)
+    ctrl = {k: v for k, v in params.items() if k != "obj_half"}   # pick() takes only controller knobs
+    r = scp.pick(qg, qo, (0.2, 0.0), spec.tips, record=True, rec_stride=10, **ctrl)
+    fr = r["frames"]
+    verdict = "HELD" if r["success"] else f"partial lift {r['final_height']*100:.1f}cm"
+    print(f"  physics result: {hand_name} -> {verdict}  "
+          f"(held {r['final_height']*100:+.1f}cm, {r['end_contacts']} contacts, "
+          f"final speed {r['final_speed']:.2f})")
+    np.savez("forge_pick.npz", hand=hand_name, real_half=real_half, compliant=False,
+             final_height=r["final_height"], final_speed=r["final_speed"],
+             end_contacts=r["end_contacts"], success=r["success"],
+             root_pos=fr["root_pos"], root_quat=fr["root_quat"],
+             fingers=fr["fingers"], obj_pos=fr["obj_pos"], obj_quat=fr["obj_quat"])
+    return _render_saved_pick("forge_pick.npz", out, W, H, fps, demo, kp)
 
 
 def _label_panel(img, text, accent=(244, 100, 26)):
@@ -758,9 +948,11 @@ def main():
     args = sys.argv[2:]
     grip_mode = ("pinch" if "pinch" in args else
                  ("retarget" if "retarget" in args else "human"))   # default: human
-    mode = ("physics" if "physics" in args else
-            ("overlay" if "overlay" in args else
-             ("kinematic" if "kinematic" in args else "mimic")))   # default: faithful mimic
+    mode = ("follow" if "follow" in args else
+            ("physics" if "physics" in args else
+             ("overlay" if "overlay" in args else
+              ("kinematic" if "kinematic" in args else
+               ("mimic" if "mimic" in args else "follow")))))   # default: follow the human
     orbit = "orbit" in args
     az, el, zoom = -120.0, -12.0, 1.0
     for a in args:                                   # az=-90  el=10  zoom=1.4
@@ -771,7 +963,9 @@ def main():
     rest = [a for a in args if a not in consumed and not a.startswith(("az=", "el=", "zoom="))]
     nums = [a for a in rest if a.lstrip("-").isdigit()]
     stride = int(nums[0]) if nums else 3
-    hand = next((a for a in rest if not a.lstrip("-").isdigit()), "leap")
+    hand = next((a for a in rest if not a.lstrip("-").isdigit()), None)
+    if hand is None:
+        hand = "allegro" if mode == "physics" else "leap"   # allegro lifts the real cube
     hd = load_input(sys.argv[1]); demo, kp = hd.to_demo()
     if "trio" in args:
         print(f"Loaded {demo.T} frames, object '{hd.object_name}'. Rendering TRIO "

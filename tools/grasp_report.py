@@ -9,13 +9,14 @@ coherence numbers that actually catch that:
   cube vs palm/fingers      : is the cube held between the fingers, or swallowed into the palm
 
 Run:
-  python grasp_report.py ~/dexcanvas/mocap_ver0.1.parquet            # leap, retarget
-  python grasp_report.py ~/dexcanvas/mocap_ver0.1.parquet leap human
+  python tools/grasp_report.py ~/dexcanvas/mocap_ver0.1.parquet            # leap, retarget
+  python tools/grasp_report.py ~/dexcanvas/mocap_ver0.1.parquet leap human
 """
 import os, sys
 if "MUJOCO_GL" not in os.environ and sys.platform != "darwin" and not os.environ.get("DISPLAY"):
     os.environ["MUJOCO_GL"] = "osmesa"; os.environ["PYOPENGL_PLATFORM"] = "osmesa"
 import numpy as np, mujoco
+import os, sys; sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root on path
 from render_demo import clean_trajectory
 
 

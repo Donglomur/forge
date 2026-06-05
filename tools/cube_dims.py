@@ -4,7 +4,7 @@ The render currently GUESSES the cube size from fingertip spread. If the dataset
 stores the true object dimensions, we should use them. This dumps every size-like
 field and the full object_info block so we can wire the real number in.
 
-  python cube_dims.py ~/dexcanvas/mocap_ver0.1.parquet [row]
+  python tools/cube_dims.py ~/dexcanvas/mocap_ver0.1.parquet [row]
 """
 import sys
 import numpy as np

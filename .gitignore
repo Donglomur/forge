@@ -1,30 +1,15 @@
-# python
 __pycache__/
-*.py[cod]
-.venv/
-venv/
-*.egg-info/
-
-# renders / outputs at repo root (keep docs/ assets, see below)
-/*.mp4
-/*.gif
-/*.png
-forge_demo.*
-forge_audit.*
-trace_match.*
-
-# but DO keep everything under docs/ (banner, demo gif, screenshots)
-!docs/
-!docs/**
-
-# data (keep big parquet demos out of git)
-*.parquet
-dexcanvas/
-
-# packaging
-*.tar.gz
-
-# os / editor
+*.pyc
+*.pyo
 .DS_Store
-.idea/
-.vscode/
+# generated run outputs
+forge_pick.npz
+forge_demo.mp4
+demo_grid.png
+MUJOCO_LOG.TXT
+trace_match.csv
+trace_match.png
+# data (never commit the parquet; it's huge and private)
+*.parquet
+*.npz
+!assets/demos/*.npz   # keep the small bundled demo, drop the rest

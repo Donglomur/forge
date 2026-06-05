@@ -76,7 +76,7 @@ def force_closure_metric(contact_pos, contact_normal, com, mu=0.8, n_edges=6, la
 
 class ReplayScene:
     def __init__(self, hand_xml_path, palm_body, obj_size=(0.02, 0.02, 0.02),
-                 obj_mass=0.05, table_z=0.0, obj_type="box", compliant_wrist=False):
+                 obj_mass=0.05, table_z=0.0, obj_type="box"):
         spec = mujoco.MjSpec.from_file(hand_xml_path)
         # The mocap "wrist controller" must be a direct child of world. For hands
         # whose palm is buried under a forearm/wrist chain (e.g. Shadow), drive
@@ -93,22 +93,8 @@ class ReplayScene:
         palm_pose = se3.make_pose(tmp_d.xpos[pid], tmp_d.xmat[pid].reshape(3, 3))
         self.root_to_palm = se3.pose_in_A_to_pose_in_B(palm_pose, se3.pose_inv(root_pose))
 
-        if compliant_wrist:
-            # Dynamic root welded to a mocap target through a SOFT spring: the hand
-            # tracks the target but yields to contact, so it stops at the table
-            # instead of being kinematically forced through it.
-            tgt = spec.worldbody.add_body(); tgt.name = "wrist_target"; tgt.mocap = True
-            spec.body(root_body).add_freejoint()
-            eq = spec.add_equality()
-            eq.type = mujoco.mjtEq.mjEQ_WELD; eq.objtype = mujoco.mjtObj.mjOBJ_BODY
-            eq.name1 = "wrist_target"; eq.name2 = root_body
-            eq.solref = [0.05, 1.0]; eq.solimp = [0.95, 0.99, 0.001, 0.5, 2.0]
-            eq.data = np.array([0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1.0])
-            self._target_body = "wrist_target"
-        else:
-            spec.body(root_body).mocap = True
-            self._target_body = root_body
-        self._compliant = bool(compliant_wrist)
+        # make the root a kinematically-driven mocap body
+        spec.body(root_body).mocap = True
         self._root_body = root_body
         # free object
         obj = spec.worldbody.add_body(name="object")
@@ -138,13 +124,9 @@ class ReplayScene:
             self.model.dof_damping[adr] = max(self.model.dof_damping[adr], 0.05)
         self.data = mujoco.MjData(self.model)
         self.palm_bid = self.model.body(palm_body).id
-        self.mocap_id = self.model.body(self._target_body).mocapid[0]
+        self.mocap_id = self.model.body(self._root_body).mocapid[0]
         self.obj_bid = self.model.body("object").id
         self.obj_qadr = self.model.jnt_qposadr[self.model.body("object").jntadr[0]]
-        if self._compliant:
-            self._root_qadr = int(self.model.jnt_qposadr[self.model.body(root_body).jntadr[0]])
-        else:
-            self._root_qadr = None
         self.table_z = table_z
         self.obj_half_z = obj_size[2]
 
@@ -419,8 +401,7 @@ class ReplayScene:
     def pick(self, grasp_q, open_q, obj_xy, tip_names, wrist_R=None,
              approach=0.12, pre_splay=0.6, grip_gain=70.0, overclose=0.4,
              grip_force=1.2, solver_iters=100, mu=1.8, lift_h=0.12,
-             hold=150, substeps=8, record=False, rec_stride=12,
-             active_act=None, meet_tips=None):
+             hold=150, substeps=8):
         """Execute a top-down table pick toward a (refined) force-closure grasp.
 
         The object rests on the table at obj_xy=(x,y). The hand is positioned so
@@ -445,16 +426,7 @@ class ReplayScene:
         nu = m.nu
         grasp_q = np.asarray(grasp_q, float); open_q = np.asarray(open_q, float)
         tips = [m.body(t).id for t in tip_names]
-        meet = [m.body(t).id for t in (meet_tips or tip_names)]   # tips that meet the object
         fadr = [m.jnt_qposadr[m.actuator_trnid[i, 0]] for i in range(nu)]
-        # finger mask: when active_act is given, ONLY those actuators are driven to
-        # close (an antipodal pinch); the rest are parked OPEN, out of the way.
-        act_mask = np.zeros(nu, bool)
-        if active_act is None: act_mask[:] = True
-        else: act_mask[list(active_act)] = True
-        def apply_ctrl(target):
-            c = open_q.copy(); c[act_mask] = np.asarray(target)[act_mask]
-            d.ctrl[:] = c
         m.opt.iterations = max(int(m.opt.iterations), int(solver_iters))
         for i in range(nu):
             m.actuator_gainprm[i, 0] = grip_gain; m.actuator_biasprm[i, 1] = -grip_gain
@@ -468,15 +440,10 @@ class ReplayScene:
         cube = np.array([obj_xy[0], obj_xy[1], self.table_z + half])
         pre = np.clip(open_q + pre_splay * (open_q - grasp_q), lo, hi)
 
-        def set_wrist(p, seat=False):
+        def set_wrist(p):
             root = se3.make_pose(p, wrist_R) @ se3.pose_inv(self.root_to_palm)
             wp, wR = se3.unmake_pose(root)
             d.mocap_pos[self.mocap_id] = wp; d.mocap_quat[self.mocap_id] = se3.mat2quat(wR)
-            # in compliant mode the root is a free body; seat it on the target for
-            # static (mj_forward) reads, then let the weld carry it during stepping
-            if seat and self._compliant and self._root_qadr is not None:
-                d.qpos[self._root_qadr:self._root_qadr + 3] = wp
-                d.qpos[self._root_qadr + 3:self._root_qadr + 7] = se3.mat2quat(wR)
 
         def squeeze(extra):
             return np.clip(grasp_q + extra * (grasp_q - open_q), lo, hi)
@@ -485,57 +452,38 @@ class ReplayScene:
         d.qpos[self.obj_qadr:self.obj_qadr + 3] = cube
         d.qpos[self.obj_qadr + 3:self.obj_qadr + 7] = [1, 0, 0, 0]
         # position the wrist so the CLOSED fingertips meet at the object
-        probe = np.array([0.0, 0.0, 0.3]); set_wrist(probe, seat=True)
+        probe = np.array([0.0, 0.0, 0.3]); set_wrist(probe)
         d.qpos[fadr] = grasp_q; mujoco.mj_forward(m, d)
-        off = np.mean([d.xpos[b] for b in meet], axis=0) - probe
+        off = np.mean([d.xpos[b] for b in tips], axis=0) - probe
         gp = cube - off
 
-        root_bid = self.model.body(self._root_body).id
-        rec = {"root_pos": [], "root_quat": [], "fingers": [], "obj_pos": [], "obj_quat": []}
-        def snap():
-            rec["root_pos"].append(d.xpos[root_bid].copy())             # ACTUAL hand pose
-            rec["root_quat"].append(se3.mat2quat(d.xmat[root_bid].reshape(3, 3)))
-            rec["fingers"].append(d.qpos[fadr].copy())
-            rec["obj_pos"].append(d.qpos[self.obj_qadr:self.obj_qadr + 3].copy())
-            rec["obj_quat"].append(d.qpos[self.obj_qadr + 3:self.obj_qadr + 7].copy())
-
-        set_wrist(gp + [0, 0, approach], seat=True); d.qpos[fadr] = pre; mujoco.mj_forward(m, d)
+        set_wrist(gp + [0, 0, approach]); d.qpos[fadr] = pre; mujoco.mj_forward(m, d)
         for _ in range(80):                                  # settle the object
-            apply_ctrl(pre); mujoco.mj_step(m, d)
-        if record: snap()
+            d.ctrl[:] = pre; mujoco.mj_step(m, d)
         for s in range(300):                                 # descend (spread, clearing)
-            set_wrist(gp + [0, 0, approach * (1 - s / 300.0)]); apply_ctrl(pre)
+            set_wrist(gp + [0, 0, approach * (1 - s / 300.0)]); d.ctrl[:] = pre
             mujoco.mj_step(m, d)
-            if record and s % rec_stride == 0: snap()
         for s in range(300):                                 # close, squeezing as we go
             q_a = pre + (s / 300.0) * (grasp_q - pre)
-            apply_ctrl(np.clip(q_a + overclose * (q_a - open_q), lo, hi))
+            d.ctrl[:] = np.clip(q_a + overclose * (q_a - open_q), lo, hi)
             mujoco.mj_step(m, d)
-            if record and s % rec_stride == 0: snap()
         path = []
         for s in range(800):                                 # lift, ease-in
             a = 0.5 - 0.5 * np.cos(np.pi * (s + 1) / 800.0)
-            set_wrist(gp + [0, 0, lift_h * a]); apply_ctrl(squeeze(overclose))
+            set_wrist(gp + [0, 0, lift_h * a]); d.ctrl[:] = squeeze(overclose)
             for _ in range(substeps):
                 mujoco.mj_step(m, d)
             path.append(d.xpos[self.obj_bid].copy())
-            if record and s % rec_stride == 0: snap()
-        for s in range(hold):                                # hold at the top, let it settle
-            apply_ctrl(squeeze(overclose)); mujoco.mj_step(m, d)
-            if record and s % rec_stride == 0: snap()
-        if record: snap()
+        for _ in range(hold):                                # hold at the top, let it settle
+            d.ctrl[:] = squeeze(overclose); mujoco.mj_step(m, d)
 
-        finite = np.all(np.isfinite(d.qpos)) and np.all(np.isfinite(d.qvel))
-        raw_h = float(d.xpos[self.obj_bid][2] - (self.table_z + half))
-        final_height = raw_h if (finite and abs(raw_h) < 1.0) else 0.0   # guard explosions
-        final_speed = float(np.linalg.norm(d.cvel[self.obj_bid])) if finite else 1e3
+        final_height = float(d.xpos[self.obj_bid][2] - (self.table_z + half))
+        final_speed = float(np.linalg.norm(d.cvel[self.obj_bid]))
         end_contacts = sum(1 for c in range(d.ncon)
                            if (d.contact[c].geom1 in obj_gid) ^ (d.contact[c].geom2 in obj_gid))
+        finite = np.all(np.isfinite(d.qpos))
         success = bool(0.04 < final_height < 0.18 and final_speed < 1.0
                        and end_contacts > 0 and finite)
-        out = {"success": success, "final_height": final_height,
-               "final_speed": final_speed, "end_contacts": end_contacts,
-               "object_path": np.array(path)}
-        if record:
-            out["frames"] = {k: np.array(v) for k, v in rec.items()}
-        return out
+        return {"success": success, "final_height": final_height,
+                "final_speed": final_speed, "end_contacts": end_contacts,
+                "object_path": np.array(path)}

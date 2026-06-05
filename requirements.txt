@@ -1,8 +1,13 @@
+# core pipeline
 mujoco>=3.2
-scipy
 numpy
-mediapipe
-opencv-python
+scipy
 pandas
 pyarrow
-huggingface_hub
+imageio
+imageio-ffmpeg
+matplotlib
+
+# optional: hand-video input only (forge/video.py)
+mediapipe
+opencv-python

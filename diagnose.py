@@ -49,6 +49,17 @@ def summary_box(SUMMARY, elapsed):
                          for k, (ok, eps, _) in fc.items())
         print(f"  {BOLD}force-closure gate{RESET}   {det}")
         print(f"  {DIM}                     {passed}/{len(fc)} hands reach force closure{RESET}")
+    rf = SUMMARY.get("refine", {})
+    if rf:
+        det = "   ".join(f"{WHITE}{k}{RESET} {GREY}{a:.3f}{RESET}{AMBER}→{RESET}{GREEN}{b:.3f}{RESET}"
+                         for k, (a, b) in rf.items())
+        print(f"  {BOLD}grasp refinement{RESET}     force-closure margin:  {det}")
+    pk = SUMMARY.get("pick", {})
+    if pk:
+        det = "   ".join(f"{WHITE}{k}{RESET} "
+                         f"{(GREEN + 'PICKED ' if ok else GREY + 'slip ')}{h*100:+.0f}cm{RESET}"
+                         for k, (h, ok) in pk.items())
+        print(f"  {BOLD}pick execution{RESET}       table pick (held height):  {det}")
     y = SUMMARY.get("yield")
     if y:
         print(f"  {BOLD}factory yield{RESET}        {GREEN}{y[0]}{RESET}/{y[1]} "
@@ -60,7 +71,7 @@ def summary_box(SUMMARY, elapsed):
 def main():
     banner()
     t_start = time.time()
-    SUMMARY = {"retarget": {}, "fc": {}, "yield": None}
+    SUMMARY = {"retarget": {}, "fc": {}, "refine": {}, "pick": {}, "yield": None}
     hdr("ENVIRONMENT")
     print("[env] platform :", platform.platform())
     print("[env] python   :", sys.version.split()[0], "|", sys.executable)
@@ -162,6 +173,50 @@ def main():
         except Exception as e:
             print(f"[retarget] {n}: FAILED: {e}"); traceback.print_exc()
 
+    # ---- per-part human-vs-robot fidelity (Curl gesture vs DexPilot grasp) ----
+    hdr("HAND-MATCH FIDELITY  (per-finger human vs robot, degrees)")
+    try:
+        import handmatch as HM
+        from forge.retarget import CurlRetargeter
+        gf0 = int(np.argmin(np.linalg.norm(kp[:, 4] - kp[:, 8], axis=1)))
+        fingers = ["index", "middle", "ring", "thumb"]
+        for n, sp in specs.items():
+            m = sp.build_model()
+            if m.nu != 16:                       # leap/allegro share the 4x4 layout
+                print(f"[match] {n:8s} skipped (layout not 4x4)"); continue
+            d = mujoco.MjData(m)
+            fadr = [m.jnt_qposadr[m.actuator_trnid[i, 0]] for i in range(m.nu)]
+            tb = list(sp.tips); th = sp.thumb_idx if sp.thumb_idx >= 0 else len(tb) - 1
+            order = [i for i in range(len(tb)) if i != th][:3] + [th]
+            chains = {fingers[k]: HM._robot_chain(m, tb[order[k]], sp.palm) for k in range(4)}
+            res = {}
+            for label, rt in (("curl", CurlRetargeter(sp)),
+                              ("dex ", DexPilotRetargeter(sp))):
+                q = rt.retarget_sequence(kp)
+                be = {f: [] for f in chains}; pr = []
+                for t in range(0, len(kp), 4):    # every 4th frame is plenty
+                    d.qpos[fadr] = q[t] if q.shape[1] == m.nu else q[t][:m.nu]
+                    mujoco.mj_forward(m, d)
+                    Rh = HM._palm_frame(kp[t, 0], np.array([kp[t, HM.HUMAN_TIP[f]] for f in fingers]))
+                    rtips = np.array([d.xpos[m.body(tb[order[k]]).id] for k in range(4)])
+                    Rr = HM._palm_frame(d.xpos[m.body(sp.palm).id], rtips)
+                    R = Rr @ Rh.T
+                    pr.append(np.degrees(np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1))))
+                    for f in chains:
+                        hb = HM._bends(kp[t, HM.HUMAN_CHAIN[f]])
+                        rb = HM._bends(np.array([d.xpos[b] for b in chains[f]]))
+                        kk = min(len(hb), len(rb))
+                        if kk: be[f].append(np.abs(hb[-kk:] - rb[-kk:]).mean())
+                res[label] = (float(np.mean(pr)),
+                              {f: float(np.mean(be[f])) if be[f] else float("nan") for f in chains})
+            pc, bc = res["curl"]; pd, bd = res["dex "]
+            print(f"[match] {n:8s} palm-frame rotation:  curl {pc:5.1f}deg   dexpilot {pd:5.1f}deg")
+            print(f"[match] {n:8s} mean bend err/finger: " +
+                  "  ".join(f"{f[:3]} {bc[f]:.0f}/{bd[f]:.0f}" for f in fingers) +
+                  "   (curl/dex deg)")
+    except Exception as e:
+        print(f"[match] FAILED: {e}"); traceback.print_exc()
+
     # ---- physics replay: sample rollouts per hand ----
     hdr("GRASP REACH CHECK (real trajectory, grasp frame)")
     # seat each hand at the tightest-pinch frame of the REAL (un-multiplied) demo
@@ -211,6 +266,97 @@ def main():
             print(f"[fc] {n:8s} {verdict:14s} eps={eps:.4f}  contacts={ncon}")
         except Exception as e:
             print(f"[fc] {n}: FAILED: {e}"); traceback.print_exc()
+
+    hdr("GRASP REFINEMENT  (force-closure CEM on the analytic metric, CPU)")
+    from forge.refine import refine_grasp
+    refined = {}
+    for n, sp in specs.items():
+        try:
+            sc = ReplayScene(sp.xml_path, sp.palm, table_z=tbl)
+            dp = DexPilotRetargeter(sp); fq = dp.retarget_sequence(kp)
+            obj_rel = np.linalg.inv(demo.eef_poses[gf]) @ objw[gf]
+            fq_ref, e0, e1 = refine_grasp(sc, demo.eef_poses, fq, obj_rel, gf,
+                                          iters=5, npop=12, elite=4)
+            refined[n] = fq_ref
+            SUMMARY["refine"][n] = (float(e0), float(e1))
+            gain = (e1 - e0)
+            print(f"[refine] {n:8s} eps {e0:.4f} -> {e1:.4f}   "
+                  f"({'+' if gain >= 0 else ''}{gain:.4f} force-closure margin)")
+        except Exception as e:
+            print(f"[refine] {n}: FAILED: {e}"); traceback.print_exc()
+
+    hdr("PICK EXECUTION  (REAL object size, controller auto-tuned, force-capped)")
+    from forge.tune import tune_pick
+    best = None
+    for n, sp in specs.items():
+        try:
+            m0 = sp.build_model()
+            fq_ref = refined.get(n)
+            if fq_ref is None or fq_ref.shape[1] != m0.nu:
+                print(f"[pick] {n:8s} skipped (no refined grasp / nq!=nu mapping)")
+                continue
+            # REAL object size, measured from the demo (NOT chosen by us)
+            sc0 = ReplayScene(sp.xml_path, sp.palm, table_z=tbl)
+            dp = DexPilotRetargeter(sp); fq = dp.retarget_sequence(kp)
+            info = sc0.grasp_probe(demo.eef_poses[gf], fq[gf], objw[gf], open_q=fq[0])
+            real_half = float(info["obj_half"])
+            qg, qo = fq_ref[gf], fq_ref[0]
+            # auto-tune ONLY the controller; the object size is fixed by reality
+            params, r = tune_pick(sp, qg, qo, obj_xy=(0.2, 0.0), obj_half=real_half,
+                                  table_z=0.0, search_obj_size=False, iters=3, npop=8,
+                                  compliant_wrist=False)
+            SUMMARY["pick"][n] = (float(r["final_height"]), bool(r["success"]))
+            ctrl = {k: v for k, v in params.items() if k != "obj_half"}
+            sane = np.isfinite(r["final_height"]) and -0.01 < r["final_height"] < 0.30
+            if sane and (best is None or r["final_height"] > best["fh"]):
+                best = {"hand": n, "ctrl": ctrl, "real_half": real_half,
+                        "qg": qg, "qo": qo, "fh": float(r["final_height"])}
+            verdict = "PICKED" if r["success"] else "could NOT pick"
+            print(f"[pick] {n:8s} real object {2*real_half*100:.1f}cm: held {r['final_height']*100:+5.1f}cm  "
+                  f"final_speed={r['final_speed']:.2f}  contacts={r['end_contacts']}  -> {verdict}")
+            print(f"[pick] {n:8s} controller found: gain={params['grip_gain']:.0f} "
+                  f"overclose={params['overclose']:.2f} force={params['grip_force']:.2f} "
+                  f"splay={params['pre_splay']:.2f}")
+        except Exception as e:
+            print(f"[pick] {n}: FAILED: {e}"); traceback.print_exc()
+
+    # record the verified rollout ONCE so the video plays back this exact pick
+    if best is not None:
+        try:
+            sp = specs[best["hand"]]
+            scp = ReplayScene(sp.xml_path, sp.palm, obj_size=(best["real_half"],) * 3,
+                              table_z=0.0, compliant_wrist=False)
+            rr = scp.pick(best["qg"], best["qo"], (0.2, 0.0), sp.tips,
+                          record=True, rec_stride=10, **best["ctrl"])
+            fr = rr["frames"]
+            np.savez("forge_pick.npz", hand=best["hand"], real_half=best["real_half"],
+                     compliant=False,
+                     final_height=rr["final_height"], final_speed=rr["final_speed"],
+                     end_contacts=rr["end_contacts"], success=rr["success"],
+                     root_pos=fr["root_pos"], root_quat=fr["root_quat"],
+                     fingers=fr["fingers"], obj_pos=fr["obj_pos"], obj_quat=fr["obj_quat"])
+            print(f"[pick] saved verified rollout -> forge_pick.npz "
+                  f"({best['hand']}, held {rr['final_height']*100:+.1f}cm); the video renders THIS")
+        except Exception as e:
+            print(f"[pick] could not save rollout for the video: {e}")
+
+    # ---- contact-targeted antipodal pinch: thumb + most-opposed finger ----
+    hdr("ANTIPODAL PINCH  (contact-targeted: thumb + best-opposed finger, force-capped)")
+    print("  reads the human contact points, drives only the two most-opposed")
+    print("  fingers onto the object (a 2-contact pinch), verifies force closure.")
+    from forge.pinch import antipodal_pinch
+    for n, sp in specs.items():
+        try:
+            r = antipodal_pinch(sp, demo, kp, gf=gf, obj_xy=(0.2, 0.0))
+            if r.get("skipped"):
+                print(f"[pinch] {n:8s} skipped ({r['skipped']})"); continue
+            verdict = "LIFTED" if r["success"] else ("held" if r["held_cm"] > 0.3 else "slip")
+            print(f"[pinch] {n:8s} thumb+{r['finger']:<6s} opposition={r['opposition']:+.2f}  "
+                  f"held={r['held_cm']:+.1f}cm  contacts={r['end_contacts']}  -> {verdict}")
+            print(f"[pinch] {n:8s} force-closure on the pinch: {'YES' if r['fc'] else 'no '}"
+                  f"  eps={r['eps']:.3f}  ({r['fc_contacts']} contacts, {r['obj_half']*2*100:.1f}cm object)")
+        except Exception as e:
+            print(f"[pinch] {n}: FAILED: {e}")
 
     hdr("DYNAMIC EXECUTION  —  sampled relocations (research frontier)")
     from forge.multiply import multiply_demo, sample_scene

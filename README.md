@@ -47,7 +47,7 @@ The gate, which is the heart of forge, runs entirely on CPU:
 - Take the convex hull of those wrenches (the Grasp Wrench Space).
 - The grasp holds **iff the origin sits inside the hull**; the margin ε is the distance to the nearest face.
 
-Every stage is a small, independently testable module, and the diagnostics (`diagnose.py`, `audit_demo.py`, `trace_match.py`) reproduce every number below from one command.
+Every stage is a small, independently testable module, and the diagnostics (`diagnose.py`, `audit_demo.py`, `tools/trace_match.py`) reproduce every number below from one command.
 
 **Full write-up:** [The Problem](docs/PROBLEM.md) · [Method](docs/METHOD.md) · [Results & Evidence](docs/RESULTS.md)
 
@@ -103,7 +103,7 @@ The gate never simulates anything. It builds the grasp wrench matrix from the co
 # unpack (bundles real MuJoCo Menagerie hands; nothing to download)
 tar -xzf forge.tar.gz && cd forge
 python -m venv .venv && source .venv/bin/activate
-pip install mujoco scipy numpy imageio imageio-ffmpeg matplotlib
+pip install -r requirements.txt
 
 # the test suite needs no data
 python test_forge.py                                   # -> 5/5 PASS
@@ -125,11 +125,34 @@ python render_demo.py /path/to/mocap.parquet leap      # single hand, clean stud
 | `forge/multiply.py` | relocate a demo into new scenes while preserving object-relative geometry |
 | `forge/datasets.py` | DexCanvas mocap loader (keypoints + object poses) |
 | `forge/retarget.py` | optimization-based retargeter + a joint-space curl retargeter for faithful visualization |
-| `forge/replay.py` | MuJoCo scene, the **Ferrari-Canny Q1 force-closure gate**, and dynamic replay |
+| `forge/tune.py` | CEM **auto-discovery of pick-controller parameters** (no per-hand hand-tuning) |
+| `forge/replay.py` | MuJoCo scene, the **Ferrari-Canny Q1 force-closure gate**, dynamic replay, and the force-capped **table-pick executor** |
+| `forge/refine.py` | **force-closure grasp refinement** (CEM on the analytic margin, CPU) |
 | `forge/hands.py` | loads the bundled robot hand models |
 | `forge/factory.py` | end-to-end candidate generation + gating |
-| `diagnose.py`, `audit_demo.py`, `trace_match.py` | instrumentation + per-frame correspondence diagnostics |
+| `diagnose.py` | full instrumented pipeline report (the headline run) |
 | `render_demo.py` | the demo renderer (single-hand + `trio`) |
+| `audit_demo.py`, `run_factory.py` | grasp audit + factory entry point |
+| `tools/` | secondary diagnostics (`trace_match`, `grasp_report`, `cube_dims`, `retarget_demo`) |
+
+## Repository layout
+
+```
+forge/
+├── README.md  ·  LICENSE  ·  requirements.txt  ·  .gitignore
+├── forge/                  # the library
+│   ├── se3.py  multiply.py  datasets.py  retarget.py
+│   ├── replay.py           # force-closure gate + dynamic replay
+│   ├── hands.py  factory.py  video.py
+├── diagnose.py             # main pipeline report   (python diagnose.py data.parquet)
+├── render_demo.py          # demo renderer          (python render_demo.py data.parquet trio)
+├── audit_demo.py           # grasp audit
+├── run_factory.py          # factory entry point + input loader
+├── test_forge.py           # test suite             (python test_forge.py)
+├── tools/                  # secondary diagnostics  (python tools/trace_match.py ...)
+├── assets/menagerie/       # bundled LEAP / Allegro / Shadow hand models
+└── docs/                   # PROBLEM · METHOD · RESULTS · banner.svg
+```
 
 ## Documentation
 
@@ -148,8 +171,6 @@ forge today is a **validated grasp-data factory**: it converts one human demo in
 ## AI usage disclosure
 
 This project was built with heavy use of an AI assistant (Anthropic's Claude) as a pair-programming and debugging partner: drafting and refactoring code, diagnosing rendering and numerical issues, and iterating on the visualization. The research direction, system architecture, and engineering decisions were mine; I supplied the real DexCanvas data, ran every evaluation, and validated all numbers reported here against real runs. AI-suggested code that did not pass the tests or match the real-data diagnostics was rejected and reworked.
-
-> *Nicholas: tighten this to match your actual process. An accurate, specific account scores better than a vague one.*
 
 ## Credits & licenses
 
