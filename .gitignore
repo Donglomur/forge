@@ -1,0 +1,30 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# renders / outputs at repo root (keep docs/ assets, see below)
+/*.mp4
+/*.gif
+/*.png
+forge_demo.*
+forge_audit.*
+trace_match.*
+
+# but DO keep everything under docs/ (banner, demo gif, screenshots)
+!docs/
+!docs/**
+
+# data (keep big parquet demos out of git)
+*.parquet
+dexcanvas/
+
+# packaging
+*.tar.gz
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/

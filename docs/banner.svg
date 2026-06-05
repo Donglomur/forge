@@ -1,0 +1,75 @@
+<svg width="1200" height="340" viewBox="0 0 1200 340" fill="none" xmlns="http://www.w3.org/2000/svg" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="340" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0a0e18"/>
+      <stop offset="0.55" stop-color="#101a30"/>
+      <stop offset="1" stop-color="#0c1424"/>
+    </linearGradient>
+    <linearGradient id="ember" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff9d3c"/>
+      <stop offset="1" stop-color="#f4641a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#f4641a" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#f4641a" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="34" height="34" patternUnits="userSpaceOnUse">
+      <path d="M34 0H0V34" fill="none" stroke="#7da2c8" stroke-opacity="0.07" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="340" fill="url(#bg)"/>
+  <rect width="1200" height="340" fill="url(#grid)"/>
+  <ellipse cx="300" cy="170" rx="280" ry="200" fill="url(#glow)"/>
+
+  <!-- ============ left motif: human keypoints -> robot grip on a cube ============ -->
+  <g transform="translate(150,170)">
+    <!-- human hand keypoints (teal) flowing in -->
+    <g stroke="#4fd6c4" stroke-width="2.2" stroke-opacity="0.9" fill="#4fd6c4">
+      <path d="M-110 70 L-86 30 L-70 -8 L-58 -42" fill="none"/>
+      <path d="M-110 70 L-74 44 L-56 14 L-44 -16" fill="none"/>
+      <path d="M-110 70 L-58 58 L-40 34 L-30 8" fill="none"/>
+      <path d="M-110 70 L-44 70 L-26 52 L-18 30" fill="none"/>
+      <path d="M-110 70 L-92 86 L-74 92" fill="none"/>
+      <circle cx="-110" cy="70" r="5.5"/>
+      <circle cx="-86" cy="30" r="4"/><circle cx="-70" cy="-8" r="4"/><circle cx="-58" cy="-42" r="4.5"/>
+      <circle cx="-74" cy="44" r="4"/><circle cx="-56" cy="14" r="4"/><circle cx="-44" cy="-16" r="4.5"/>
+      <circle cx="-58" cy="58" r="4"/><circle cx="-40" cy="34" r="4"/><circle cx="-30" cy="8" r="4.5"/>
+      <circle cx="-44" cy="70" r="4"/><circle cx="-26" cy="52" r="4"/><circle cx="-18" cy="30" r="4.5"/>
+      <circle cx="-92" cy="86" r="4"/><circle cx="-74" cy="92" r="4.5"/>
+    </g>
+
+    <!-- conversion arrow -->
+    <g transform="translate(8,18)">
+      <path d="M0 0 H56" stroke="#9fb6d4" stroke-width="3" stroke-opacity="0.8"/>
+      <path d="M48 -8 L60 0 L48 8" fill="none" stroke="#9fb6d4" stroke-width="3" stroke-opacity="0.8"/>
+    </g>
+
+    <!-- cube with inward force-closure wrenches (orange = the gate) -->
+    <g transform="translate(150,12)">
+      <rect x="-26" y="-26" width="52" height="52" rx="5" fill="url(#ember)"/>
+      <rect x="-26" y="-26" width="52" height="52" rx="5" fill="none" stroke="#ffd9ad" stroke-opacity="0.5" stroke-width="1.5"/>
+      <g stroke="#eaf2ff" stroke-width="2.6">
+        <path d="M-70 0 H-34"/><path d="M-42 -7 L-32 0 L-42 7" fill="none"/>
+        <path d="M70 0 H34"/><path d="M42 -7 L32 0 L42 7" fill="none"/>
+        <path d="M0 -70 V-34"/><path d="M-7 -42 L0 -32 L7 -42" fill="none"/>
+        <path d="M0 70 V34"/><path d="M-7 42 L0 32 L7 42" fill="none"/>
+      </g>
+      <circle cx="-34" cy="0" r="3.4" fill="#eaf2ff"/><circle cx="34" cy="0" r="3.4" fill="#eaf2ff"/>
+      <circle cx="0" cy="-34" r="3.4" fill="#eaf2ff"/><circle cx="0" cy="34" r="3.4" fill="#eaf2ff"/>
+    </g>
+  </g>
+
+  <!-- ============ wordmark + tagline ============ -->
+  <g transform="translate(470,0)">
+    <text x="0" y="158" font-size="118" font-weight="800" letter-spacing="-4" fill="#f4f7fc">forge</text>
+    <rect x="6" y="180" width="180" height="6" rx="3" fill="url(#ember)"/>
+    <g transform="translate(352,84)">
+      <rect x="0" y="0" width="134" height="30" rx="15" fill="#1b2740" stroke="#33456a" stroke-width="1"/>
+      <text x="67" y="20" font-size="15" font-weight="700" fill="#9fb6d4" text-anchor="middle" letter-spacing="1.5">CPU-NATIVE</text>
+    </g>
+    <text x="6" y="216" font-size="23" font-weight="600" fill="#cdd9ec">human hand demos &#8594; physically-validated robot grasps</text>
+    <text x="6" y="258" font-size="16" font-weight="600" fill="#8094b0">retarget corr <tspan fill="#4fd6c4">0.79</tspan><tspan fill="#54678a">&#160;&#160;&#183;&#160;&#160;</tspan>Ferrari&#8211;Canny <tspan fill="#ff9d3c">force-closure</tspan> gate<tspan fill="#54678a">&#160;&#160;&#183;&#160;&#160;</tspan><tspan fill="#f4f7fc">30/45</tspan> pass the gate</text>
+    <text x="6" y="292" font-size="14.5" fill="#6b7f9e">4 dexterous hands &#160;&#183;&#160; MuJoCo &#160;&#183;&#160; analytic grasp quality, no GPU rollout</text>
+  </g>
+</svg>

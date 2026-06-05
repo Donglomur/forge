@@ -1,0 +1,93 @@
+========================================================================
+FORGE DIAGNOSTIC REPORT
+========================================================================
+[env] platform : macOS-15.7-arm64-arm-64bit
+[env] python   : 3.12.8 | /Users/nicholas/.venvs/forge/bin/python3
+[env] cwd       : /Users/nicholas/Downloads/forge
+[env] cpu_count : 14
+[env] mujoco  : 3.9.0
+[env] scipy   : 1.17.1
+[env] numpy   : 2.4.6
+========================================================================
+REAL HANDS
+========================================================================
+[hands] model dir: /Users/nicholas/Downloads/forge/forge/../assets/menagerie
+[hands] available: ['leap', 'allegro', 'shadow']
+[hands] leap     nq=16 nu=16 nbody=18 palm='palm' tips=['if_ds', 'mf_ds', 'rf_ds', 'th_ds'] scaling=1.0
+[hands] allegro  nq=16 nu=16 nbody=22 palm='palm' tips=['ff_tip', 'mf_tip', 'rf_tip', 'th_tip'] scaling=1.4
+[hands] shadow   nq=24 nu=20 nbody=26 palm='rh_palm' tips=['rh_thdistal', 'rh_ffdistal', 'rh_mfdistal', 'rh_rfdistal', 'rh_lfdistal'] scaling=1.1
+========================================================================
+INPUT DEMO
+========================================================================
+[input] loading REAL input: /Users/nicholas/dexcanvas/mocap_ver0.1.parquet
+[dexcanvas] auto-picked hand rotation mode='XYZ' (palm-object alignment 0.99)
+[dexcanvas] FRAME CHECK (world wrist applied: True):
+   wrist path  x[0.184,0.375] y[-0.014,0.228] z[0.021,0.302]
+   object path x[0.204,0.216] y[-0.006,0.003] z[0.033,0.241]
+   hand size wrist->middle-tip = 171mm (real hand ~170mm)
+   wrist<->object distance: min=55mm max=279mm
+   (for a grasp these should overlap and be within a hand-span)
+[dexcanvas] row 0: 1207 frames, layout=grouped, object='cube1', thumb-index gap 15-88mm
+[input] frames=1207 keypoints=(1207, 21, 3) object='cube1'
+[input] gripper range=[0.00,1.00] wrist0 pos=[0.374 0.22  0.025]
+[input] human thumb-index gap over time (mm): [57.9 57.9 57.9 ... 66.2 66.2 66.2]
+========================================================================
+SE(3) MULTIPLY INVARIANT
+========================================================================
+[multiply] object-relative drift = 4.44e-16 (want ~1e-15)
+========================================================================
+RETARGETING (plain vector  vs  DexPilot pinch)
+========================================================================
+[retarget] leap     nq=16  plain   1.0ms/frame  DexPilot   1.2ms/frame
+[retarget] leap     thumb-index gap over clip: min=  4.7mm max=105.3mm | human min= 15.8 max= 88.8 | corr(human,robot)=+0.79
+[retarget] allegro  nq=16  plain   1.1ms/frame  DexPilot   1.5ms/frame
+[retarget] allegro  thumb-index gap over clip: min=  2.1mm max= 58.4mm | human min= 15.8 max= 88.8 | corr(human,robot)=+0.77
+[retarget] shadow   nq=24  plain   0.8ms/frame  DexPilot   2.5ms/frame
+[retarget] shadow   thumb-index gap over clip: min=  7.5mm max=127.3mm | human min= 15.8 max= 88.8 | corr(human,robot)=+0.69
+========================================================================
+GRASP REACH CHECK (real trajectory, grasp frame)
+========================================================================
+[grasp] grasp frame = 679/1207; object at [0.209 0.003 0.051], wrist at [ 0.186 -0.004  0.107]
+[grasp] leap     hand-object contacts=43  nearest-link->obj=23mm  obj_half=20mm  obj_z_after_hold=4.9cm
+[grasp] allegro  hand-object contacts= 6  nearest-link->obj=39mm  obj_half=20mm  obj_z_after_hold=3.0cm
+[grasp] shadow   hand-object contacts= 4  nearest-link->obj=79mm  obj_half=20mm  obj_z_after_hold=3.2cm
+========================================================================
+REAL REPLAY (the actual demo trajectory, no relocation)
+========================================================================
+[real] leap     success=False lift= +0.0cm max_obj_speed= 0.00
+[real] allegro  success=False lift= +0.0cm max_obj_speed= 7.85
+[real] shadow   success=False lift= +0.0cm max_obj_speed= 0.03
+========================================================================
+FORCE CLOSURE GATE (Ferrari-Canny / Q1, CPU, no dynamics)
+========================================================================
+[fc] leap     FORCE CLOSURE  eps=0.3099  contacts=41
+[fc] allegro  FORCE CLOSURE  eps=0.0782  contacts=5
+[fc] shadow   not closed     eps=0.0000  contacts=1
+========================================================================
+PHYSICS REPLAY (sampled relocations)
+========================================================================
+[replay] leap     scene compiled: nq=23 nu=16 nbody=19 dt=0.0005 integrator=3
+[replay] leap     scene0: success=False lift= -0.2cm max_obj_speed= 7.70 finite=True 6822ms
+[replay] leap     scene1: success=False lift= -0.2cm max_obj_speed= 7.58 finite=True 6758ms
+[replay] leap     scene2: success=False lift= -0.2cm max_obj_speed= 9.76 finite=True 6701ms
+[replay] allegro  scene compiled: nq=23 nu=16 nbody=23 dt=0.0005 integrator=3
+[replay] allegro  scene0: success=False lift= -0.2cm max_obj_speed= 7.70 finite=True 1290ms
+[replay] allegro  scene1: success=False lift= -0.2cm max_obj_speed= 7.81 finite=True 1375ms
+[replay] allegro  scene2: success=False lift= -0.2cm max_obj_speed= 7.80 finite=True 1402ms
+[replay] shadow   scene compiled: nq=31 nu=20 nbody=27 dt=0.0005 integrator=3
+[replay] shadow   scene0: success=False lift= -0.2cm max_obj_speed= 4.10 finite=True 1561ms
+[replay] shadow   scene1: success=False lift= -0.2cm max_obj_speed= 0.37 finite=True 1568ms
+[replay] shadow   scene2: success=False lift= -0.2cm max_obj_speed= 5.60 finite=True 1571ms
+========================================================================
+FACTORY YIELD  (kinematic pre-filter vs force-closure physics gate)
+========================================================================
+  generated 45/45 trajectories across 3 embodiments x 15 scenes in 6.35s  (141.2 ms/traj)
+  generated 30/45 trajectories across 3 embodiments x 15 scenes in 9.00s  (199.9 ms/traj)
+[yield] kinematic    per-hand: {'leap': 15, 'allegro': 15, 'shadow': 15}
+[yield] force-closure per-hand: {'leap': 15, 'allegro': 15}
+[yield] gate = Ferrari-Canny Q1 force closure (analytic, CPU, no dynamic
+        rollout). A scene passes when the squeezed grasp's contact wrenches
+        span the origin, i.e. it can resist arbitrary external wrench.
+========================================================================
+END OF REPORT  (copy everything above)
+========================================================================

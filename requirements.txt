@@ -1,0 +1,8 @@
+mujoco>=3.2
+scipy
+numpy
+mediapipe
+opencv-python
+pandas
+pyarrow
+huggingface_hub
